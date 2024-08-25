@@ -2,19 +2,31 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-# optimizer, lr scheduler, mini-batch style training, and wandb logger.
+class LinearLRScheduler:
+    def __init__(self, num_iters, init_factor=1.0, end_factor=0.0):
+        self.init_factor = init_factor
+        self.end_factor = end_factor
+        self.num_iters = num_iters
+        self.decrement = (init_factor - end_factor) / num_iters
+
+    def get_factor(self, current_iter):
+        if current_iter >= self.num_iters:
+            return self.end_factor
+        return self.init_factor - self.decrement * current_iter
 
 class TemperingLearningRegression:
 
     def __init__(
-            self, 
-            D, X,
-            model, 
-            sigmas, tau, zeta, 
-            burn_in_steps, MC_steps, 
-            n, m, 
-            lr,
-            X_test=None, y_test=None):
+        self,
+        D, X,
+        model,
+        MC_steps,
+        sigmas, zeta,
+        init_lr, init_factor=1.0, end_factor=0.1,
+        n=0.1, m=0.5,
+        burn_in_fraction = 0.2,
+        tau = 1.0,
+        X_test=None, y_test=None):
 
         # make sure model, X, and D are on the same device
         assert X.device == D.device and model.parameters().__next__().device == D.device, "X, model, and D must be on the same device"
@@ -38,24 +50,27 @@ class TemperingLearningRegression:
         # set zeta
         self.zeta = zeta
         # set burn_in period
-        self.burn_in_steps = burn_in_steps
+        assert 0 < burn_in_fraction < 1, "burn_in_fraction must be greater than 0 and less than 1"
+        self.burn_in_fraction = burn_in_fraction
+        self.burn_in_steps = int(burn_in_fraction * MC_steps)
         # get T and N
         self.T, self.N, _ = D.shape
         # set MC_steps
         self.MC_steps = MC_steps
         # calculate the number of MC samples
-        self.n_MC = MC_steps - burn_in_steps
-        # set n
-        assert 0 < n <= self.N, "n must be greater than 0 and less or eqaul to N"
-        self.n = n
+        self.n_MC = MC_steps - self.burn_in_steps
+        # set n, if n is fraction then convert it to integer, else check if it is greater than 0 and less than or equal to N
+        self.n = int(n * self.N) if 0 < n < 1 and type(n) else n
+        assert 0 < self.n <= self.N, "n must be greater than 0 and less or eqaul to N"
         # set m
-        assert 0 < m <= self.n_MC, "m must be greater than 0 and less or eqaul to n_MC"
-        self.m = m
-        # set learning rate
-        self.lr = lr
+        self.m = int(m * self.n_MC) if 0 < m < 1 else m
+        assert 0 < self.m <= self.n_MC, "m must be greater than 0 and less or eqaul to self.n_MC"
         # set test set
         self.X_test = X_test
         self.y_test = y_test
+        # set up lr scheduler
+        self.init_lr = init_lr
+        self.lr_scheduler = LinearLRScheduler(self.T, init_factor=init_factor, end_factor=end_factor)
     
     def subsampling(self, t):
 
@@ -103,14 +118,14 @@ class TemperingLearningRegression:
         # add additional gradients for t > 0
         if t > 0:
             with torch.no_grad():
+                # Stack the list of tensors with arbitrary shape (_, _, ....) into a single tensor with shape (m, _, _, ....)
+                sampled_thetas = [self.S_prev[i] for i in theta_ids]
                 for n, p in self.model.named_parameters():
-                    # Stack the list of tensors with arbitrary shape (_, _, ....) into a single tensor with shape (m, _, _, ....)
-                    sampled_thetas = [self.S_prev[i] for i in theta_ids]
                     thetas_p = torch.stack([theta[n] for theta in sampled_thetas])
                     # Calculate the difference between the current parameter and the stacked parameters
                     diff = p - thetas_p
                     # Flatten the difference tensor along all dimensions except the first (shape: (m, -1))
-                    diff_flattened = diff.flatten(start_dim=1)
+                    diff_flattened = diff.view(diff.shape[0], -1) #diff.flatten(start_dim=1)
                     # Compute the squared norm of the flattened differences and apply the exponential function (shape: (m))
                     exp_norm_squared = torch.exp(-torch.sum(diff_flattened**2, dim=1) / (2 * self.zeta**2))
                     # Reshape to ensure correct broadcasting for element-wise multiplication (shape: (m, 1, 1, ....))
@@ -118,7 +133,7 @@ class TemperingLearningRegression:
                     # Compute the weighted sum of differences (shape: (_, _, ....))
                     weighted_diff = torch.sum(exp_norm_squared * diff, dim=0)
                     # Compute the sum of the exponential weights (shape: (1))
-                    denominator = torch.sum(exp_norm_squared)
+                    denominator = exp_norm_squared.sum()
                     # Update the gradient of the parameter
                     p.grad -= (1 / self.zeta**2) * weighted_diff / denominator
     
@@ -128,8 +143,7 @@ class TemperingLearningRegression:
                 p.sub_(lr * p.grad).add_(torch.randn_like(p) * np.sqrt(2 * lr))
 
     def sample_collection(self):
-
-        self.S_next.append(self.model.state_dict())
+        self.S_next.append({k: v.clone() for k, v in self.model.state_dict().items()})
     
     def evaluation(self, X, y):
         self.model.eval()
@@ -149,6 +163,8 @@ class TemperingLearningRegression:
             self.S_prev = self.S_next
             self.S_next = []
 
+            lr = self.lr_scheduler.get_factor(t) * self.init_lr
+
             for l in range(self.MC_steps):
 
                 # subsampling
@@ -156,7 +172,7 @@ class TemperingLearningRegression:
                 # gradient estimation
                 self.gradient_estimation(ids_dict)
                 # parameter update
-                self.parameter_update(self.lr)
+                self.parameter_update(lr)
                 # sample collection
                 if l >= self.burn_in_steps:
                     self.sample_collection()
