@@ -1,5 +1,5 @@
 import torch
-import numpy as np
+import math
 from tqdm import tqdm
 
 class LinearLRScheduler:
@@ -22,16 +22,20 @@ class TemperingLearningRegression:
         model,
         MC_steps,
         sigmas, zeta,
-        init_lr, init_factor=1.0, end_factor=0.1,
+        init_lr, init_factor=1.0, end_factor=0.0,
         n=0.1, m=0.5,
         burn_in_fraction = 0.2,
         tau = 1.0,
-        X_test=None, y_test=None):
+        X_test=None, y_test=None,
+        logger=None,
+        progress_bar=False):
 
         # make sure model, X, and D are on the same device
         assert X.device == D.device and model.parameters().__next__().device == D.device, "X, model, and D must be on the same device"
         if X_test is not None and y_test is not None:
             assert X.device == X_test.device and X_test.device == y_test.device, "train and test sets must be on the same device"
+
+        self.device = D.device
 
         # torch tensor with shape (T, N, 1)
         self.D = D
@@ -50,7 +54,7 @@ class TemperingLearningRegression:
         # set zeta
         self.zeta = zeta
         # set burn_in period
-        assert 0 < burn_in_fraction < 1, "burn_in_fraction must be greater than 0 and less than 1"
+        assert 0 <= burn_in_fraction < 1, "burn_in_fraction must be greater or equal to 0 and less than 1"
         self.burn_in_fraction = burn_in_fraction
         self.burn_in_steps = int(burn_in_fraction * MC_steps)
         # get T and N
@@ -60,10 +64,10 @@ class TemperingLearningRegression:
         # calculate the number of MC samples
         self.n_MC = MC_steps - self.burn_in_steps
         # set n, if n is fraction then convert it to integer, else check if it is greater than 0 and less than or equal to N
-        self.n = int(n * self.N) if 0 < n < 1 and type(n) else n
+        self.n = int(n * self.N) if 0 < n < 1 and type(n) == float else n
         assert 0 < self.n <= self.N, "n must be greater than 0 and less or eqaul to N"
         # set m
-        self.m = int(m * self.n_MC) if 0 < m < 1 else m
+        self.m = int(m * self.n_MC) if 0 < m < 1 and type(m) == float else m
         assert 0 < self.m <= self.n_MC, "m must be greater than 0 and less or eqaul to self.n_MC"
         # set test set
         self.X_test = X_test
@@ -71,22 +75,33 @@ class TemperingLearningRegression:
         # set up lr scheduler
         self.init_lr = init_lr
         self.lr_scheduler = LinearLRScheduler(self.T, init_factor=init_factor, end_factor=end_factor)
+
+        # set up logger
+        self.logger = logger
+
+        self.progress_bar = progress_bar
     
     def subsampling(self, t):
 
-        '''
-        t: int, the time index
-        '''
+        """
+        Perform subsampling for a given time index.
+
+        Args:
+            t (int): The time index.
+
+        Returns:
+            dict: A dictionary containing the time index, sampled y_ids, and theta_ids.
+        """
 
         assert 0 <= t < self.T, "t must be greater than or equal to 0 and less than T"
 
-        y_ids = torch.randperm(self.N)[:self.n]
+        y_ids = torch.randperm(self.N, device=self.device)[:self.n]
 
         if t > 0:
             assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC"
-            theta_ids = torch.randperm(self.n_MC)[:self.m].tolist()
+            theta_ids = torch.randperm(self.n_MC, device=self.device)[:self.m].tolist()
         else:
-            theta_ids = None
+            theta_ids = []
 
         return {"t": t, "y_ids": y_ids, "theta_ids": theta_ids}
 
@@ -131,19 +146,20 @@ class TemperingLearningRegression:
                     # Reshape to ensure correct broadcasting for element-wise multiplication (shape: (m, 1, 1, ....))
                     exp_norm_squared = exp_norm_squared.view(-1, *([1] * (diff.dim() - 1)))
                     # Compute the weighted sum of differences (shape: (_, _, ....))
-                    weighted_diff = torch.sum(exp_norm_squared * diff, dim=0)
+                    weighted_diff = torch.einsum('i...,i...->...', exp_norm_squared, diff)
+                    #weighted_diff = torch.sum(exp_norm_squared * diff, dim=0)
                     # Compute the sum of the exponential weights (shape: (1))
-                    denominator = exp_norm_squared.sum()
+                    denominator = exp_norm_squared.sum() + 1e-8
                     # Update the gradient of the parameter
                     p.grad -= (1 / self.zeta**2) * weighted_diff / denominator
     
     def parameter_update(self, lr):
         with torch.no_grad():
             for p in self.model.parameters():
-                p.sub_(lr * p.grad).add_(torch.randn_like(p) * np.sqrt(2 * lr))
+                p.sub_(lr * p.grad).add_(torch.randn_like(p) * math.sqrt(2 * lr))
 
     def sample_collection(self):
-        self.S_next.append({k: v.clone() for k, v in self.model.state_dict().items()})
+        self.S_next.append({k: v.detach().clone() for k, v in self.model.state_dict().items()})
     
     def evaluation(self, X, y):
         self.model.eval()
@@ -152,40 +168,50 @@ class TemperingLearningRegression:
             mse = torch.nn.functional.mse_loss(y_hat, y, reduction="mean").item()
         self.model.train()
         return mse
+    
+    def run_mc_steps(self, lr, t):
+        for l in range(self.MC_steps):
+            ids_dict = self.subsampling(t)
+            self.gradient_estimation(ids_dict)
+            self.parameter_update(lr)
+            if l >= self.burn_in_steps:
+                self.sample_collection()
 
     def train(self):
 
         train_loss = []
         test_loss = []
 
-        for t in tqdm(range(self.T)):
+        for t in tqdm(range(self.T), disable=not self.progress_bar):
 
             self.S_prev = self.S_next
             self.S_next = []
 
             lr = self.lr_scheduler.get_factor(t) * self.init_lr
 
-            for l in range(self.MC_steps):
-
-                # subsampling
-                ids_dict = self.subsampling(t)
-                # gradient estimation
-                self.gradient_estimation(ids_dict)
-                # parameter update
-                self.parameter_update(lr)
-                # sample collection
-                if l >= self.burn_in_steps:
-                    self.sample_collection()
+            self.run_mc_steps(lr, t)
             
             # evaluation
-            train_mse_loss = self.evaluation(self.X, self.D[-1,:,:])
+            train_mse_loss = self.evaluation(self.X, self.D[t,:,:])
             train_loss.append(train_mse_loss)
-            #tqdm.write(f"Train MSE Loss at iteration {t}: {train_mse_loss}")
+            
+            log_dict = {
+                "time": t,
+                "train_loss": train_mse_loss,
+                "learning_rate": lr
+            }
 
             if self.X_test is not None and self.y_test is not None:
                 test_mse_loss = self.evaluation(self.X_test, self.y_test)
                 test_loss.append(test_mse_loss)
-                #tqdm.write(f"Test MSE Loss at iteration {t}: {test_mse_loss}")
+                log_dict["test_loss"] = test_mse_loss
+
+            if self.logger is not None:
+                self.logger.log(log_dict)
+
+            if t == self.T - 1 and self.X_test is not None and self.y_test is not None and self.logger is not None:
+                self.logger.log({"final_test_loss": test_mse_loss})
+
         return train_loss, test_loss
 
             
