@@ -9,6 +9,10 @@ __pycache__/
 # ignore wandb
 wandb/
 
+# ignores all contents of the datasets folder except for the preprocess.py
+datasets/*
+!datasets/preprocess.py
+
 # ignore .DS_Store
 .DS_Store
 
