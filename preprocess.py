@@ -51,7 +51,8 @@ def preprocess_UCI_dataset(dataset_id, encoding_type, test_size=0.2, random_stat
     X_train_processed = preprocessor.fit_transform(X_train)
     X_test_processed = preprocessor.transform(X_test)
     
-    return X_train_processed, X_test_processed, y_train, y_test, preprocessor
+    return X_train_processed, X_test_processed, y_train.to_numpy(), y_test.to_numpy(), preprocessor
+
 
 
 
