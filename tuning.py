@@ -103,6 +103,8 @@ def fit(config=None):
             tau = config.tau,
             zeta = config.zeta,
             init_lr = config.lr,
+            init_factor = 1.0,
+            end_factor = config.end_factor,
             burn_in_fraction=config.burn_in_fraction,
             MC_steps=config.MC_steps,
             n = config.n,
@@ -170,13 +172,16 @@ if __name__ == "__main__":
 
     parameters_dict = {
         'T': {
-            'values': [100, 200, 500]
+            'values': [100, 200, 400]
             },
         'init_sigma': {
             'values': [2.0, 1.0, 0.1]
         },
         'lr': {
-            'values': [1e-4, 1e-5, 1e-6]
+            'values': [5e-4, 1e-4, 1e-5, 1e-6]
+        },
+        'end_factor': {
+            'values': [0.0, 0.1, 0.5, 1.0]
         },
         'n': {
             'values': [0.1, 0.3, 0.5, 0.7]
