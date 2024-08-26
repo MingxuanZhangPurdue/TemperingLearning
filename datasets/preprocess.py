@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sklearn.model_selection import train_test_split
 from sklearn.compose import make_column_selector as selector
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -19,12 +19,19 @@ name_to_id_dict = {
     "abalone": 1,
     "automobile": 10,
     "auto_mpg": 9,
-    "bike_sharing": 275
 }
 
 def parse_arguments():
 
     parser = argparse.ArgumentParser(description='Preprocess UCI dataset')
+
+    parser.add_argument(
+        "--encoding_type",
+        type=str,
+        default="onehot",
+        choices=["onehot", "ordinal"],
+        help="Type of encoding to use for categorical features"
+    )
 
     parser.add_argument(
         '--dataset_name', 
@@ -55,10 +62,11 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def preprocess_dataset(dataset_name, test_size=0.2, random_state=42):
+def preprocess_dataset(dataset_name, encoding_type, test_size=0.2, random_state=42):
 
     # Load the dataset
-    dataset = fetch_ucirepo(id=name_to_id_dict[dataset_name]) 
+    dataset = fetch_ucirepo(id=name_to_id_dict[dataset_name])
+    print ("Fetched dataset name:", dataset.metadata.name)
     X = dataset.data.features
     y = dataset.data.targets
 
@@ -70,16 +78,21 @@ def preprocess_dataset(dataset_name, test_size=0.2, random_state=42):
     numeric_columns_selector = selector(dtype_exclude=object)
     numeric_features = numeric_columns_selector(X)
     categorical_features = categorical_columns_selector(X)
+
+    print ("Numeric features: ", numeric_features)
+    print ("Categorical features: ", categorical_features)
     
     # Create preprocessing pipelines
     numeric_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='mean')),
         ('scaler', StandardScaler())
     ])
+
+    Encoder = OneHotEncoder() if encoding_type == "onehot" else OrdinalEncoder()
     
     categorical_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='most_frequent')),
-        ('onehot', OrdinalEncoder())
+        ('onehot', Encoder)
     ])
     
     # Combine preprocessing steps
@@ -102,11 +115,19 @@ if __name__ == "__main__":
 
     args = parse_arguments()
 
-    X_train, X_test, y_train, y_test, preprocessor = preprocess_dataset(args.dataset_name, args.test_size, args.seed)
+    print ("Specified dataset name:", args.dataset_name)
+    print ("UCI ID:", name_to_id_dict[args.dataset_name])
+    print ("Test size:", args.test_size)
+    print ("Seed:", args.seed)
+    print ("Encoding type:", args.encoding_type)
+
+    X_train, X_test, y_train, y_test, preprocessor = preprocess_dataset(
+        args.dataset_name, 
+        args.encoding_type, 
+        args.test_size, 
+        args.seed
+    )
     
-    print ("Dataset: ", args.dataset_name)
-    print ("Test size: ", args.test_size)
-    print ("Seed: ", args.seed)
     print ("X_train: ", X_train.shape)
     print ("X_test: ", X_test.shape)
     print ("y_train: ", y_train.shape)
