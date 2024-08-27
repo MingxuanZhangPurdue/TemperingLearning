@@ -32,7 +32,7 @@ def parse_arguments():
     parser.add_argument(
         '--count', 
         type=int, 
-        default=200,
+        default=None,
         help='Number of hyperparameter combinations to try'
     )
 
