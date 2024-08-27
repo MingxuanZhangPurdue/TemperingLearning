@@ -23,7 +23,7 @@ class TemperingLearningRegression:
         MC_steps,
         sigmas, zeta,
         init_lr, init_factor=1.0, end_factor=0.0,
-        n=0.1, m=0.5,
+        n=0.1, m=0.7,
         burn_in_fraction = 0.2,
         tau = 1.0,
         X_test=None, y_test=None,
@@ -126,7 +126,7 @@ class TemperingLearningRegression:
         # y_hat: torch tensor with shape (n, 1)
         y_hat = self.model(x)
 
-        mse_loss = self.N * torch.nn.functional.mse_loss(y_hat, y, reduction="mean") / (2 * (self.sigmas[t]**2 + self.tau**2))
+        mse_loss = torch.nn.functional.mse_loss(y_hat, y, reduction="mean") / (2 * (self.sigmas[t]**2 + self.tau**2))
         mse_loss.backward()
 
         # add additional gradients for t > 0
@@ -150,12 +150,12 @@ class TemperingLearningRegression:
                     # Compute the sum of the exponential weights (shape: (1))
                     denominator = exp_norm_squared.sum() + 1e-8
                     # Update the gradient of the parameter
-                    p.grad -= (1 / self.zeta**2) * weighted_diff / denominator
+                    p.grad -= (1 / (self.N * self.zeta**2)) * weighted_diff / denominator
     
     def parameter_update(self, lr):
         with torch.no_grad():
             for p in self.model.parameters():
-                p.sub_(lr * p.grad).add_(torch.randn_like(p) * math.sqrt(2 * lr))
+                p.sub_(lr * p.grad) #.add_(torch.randn_like(p) * math.sqrt(2 * lr))
 
     def sample_collection(self):
         self.S_next.append({k: v.detach().clone() for k, v in self.model.state_dict().items()})
