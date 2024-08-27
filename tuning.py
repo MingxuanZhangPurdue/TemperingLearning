@@ -13,8 +13,8 @@ name_to_id_dict = {
     "wine_quality": 186,
     "student_performance": 320,
     "abalone": 1,
-    "automobile": 10,
-    "auto_mpg": 9,
+    "liver_disorders": 60,
+    "concrete_compressive_strength": 165
 }
 
 def parse_arguments():
