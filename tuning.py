@@ -188,7 +188,7 @@ if __name__ == "__main__":
             'values': [1e-4, 1e-5, 5e-6]
         },
         'MC_steps': {
-            'values': [10, 20, 50]
+            'values': [20, 50, 100]
         },
         'burn_in_fraction': {
             'values': [0.3, 0.5, 0.7]
