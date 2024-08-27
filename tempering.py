@@ -34,7 +34,6 @@ class TemperingLearningRegression:
         assert X.device == D.device and model.parameters().__next__().device == D.device, "X, model, and D must be on the same device"
         if X_test is not None and y_test is not None:
             assert X.device == X_test.device and X_test.device == y_test.device, "train and test sets must be on the same device"
-
         self.device = D.device
 
         # torch tensor with shape (T, N, 1)
@@ -133,9 +132,9 @@ class TemperingLearningRegression:
         # add additional gradients for t > 0
         if t > 0:
             with torch.no_grad():
-                # Stack the list of tensors with arbitrary shape (_, _, ....) into a single tensor with shape (m, _, _, ....)
                 sampled_thetas = [self.S_prev[i] for i in theta_ids]
                 for n, p in self.model.named_parameters():
+                    # Stack the list of tensors with arbitrary shape (_, _, ....) into a single tensor with shape (m, _, _, ....)
                     thetas_p = torch.stack([theta[n] for theta in sampled_thetas])
                     # Calculate the difference between the current parameter and the stacked parameters
                     diff = p - thetas_p
