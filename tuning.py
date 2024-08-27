@@ -179,7 +179,7 @@ if __name__ == "__main__":
 
     parameters_dict = {
         'T': {
-            'values': [500, 1000]
+            'values': [100, 500, 1000]
             },
         'init_sigma': {
             'value': 1.0
