@@ -203,7 +203,7 @@ if __name__ == "__main__":
             'value': 0.1
         },
         'm': {
-            'value': 0.5
+            'value': 0.9
         },
         'tau': {
             'value': 1.0
