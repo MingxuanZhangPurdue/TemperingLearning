@@ -53,6 +53,12 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--normalize_target",
+        action="store_true",
+        help="Whether to normalize the target variable"
+    )
+
+    parser.add_argument(
         '--test_size', 
         type=float, 
         default=0.2,
@@ -139,9 +145,10 @@ if __name__ == "__main__":
     print ("Device: ", device)
     print ("Seed: ", args.seed)
 
-    X_train, X_test, y_train, y_test, preprocessor = preprocess_UCI_dataset(
+    X_train, X_test, y_train, y_test, preprocessor, y_scaler = preprocess_UCI_dataset(
         name_to_id_dict[args.dataset_name], 
         args.encoding_type, 
+        args.normalize_target,
         args.test_size, 
         args.seed
     )

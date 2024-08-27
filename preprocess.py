@@ -7,7 +7,12 @@ from sklearn.pipeline import Pipeline
 
 from ucimlrepo import fetch_ucirepo
 
-def preprocess_UCI_dataset(dataset_id, encoding_type, test_size=0.2, random_state=42):
+def preprocess_UCI_dataset(
+        dataset_id, 
+        encoding_type="onehot",
+        normalize_target=False,
+        test_size=0.2, 
+        random_state=42):
 
     # Load the dataset
     dataset = fetch_ucirepo(id=dataset_id)
@@ -50,8 +55,18 @@ def preprocess_UCI_dataset(dataset_id, encoding_type, test_size=0.2, random_stat
     # Fit the preprocessor on the training data and transform both train and test sets
     X_train_processed = preprocessor.fit_transform(X_train)
     X_test_processed = preprocessor.transform(X_test)
+
+    # Normalize the target variable
+    if normalize_target:
+        y_scaler = StandardScaler()
+        y_train_processed = y_scaler.fit_transform(y_train)
+        y_test_processed = y_scaler.transform(y_test)
+    else:
+        y_scaler = None
+        y_train_processed = y_train.to_numpy()
+        y_test_processed = y_test.to_numpy()
     
-    return X_train_processed, X_test_processed, y_train.to_numpy(), y_test.to_numpy(), preprocessor
+    return X_train_processed, X_test_processed, y_train_processed, y_test_processed, preprocessor, y_scaler
 
 
 

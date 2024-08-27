@@ -208,8 +208,20 @@ class TemperingLearningRegression:
             if self.logger is not None:
                 self.logger.log(log_dict)
 
-            if t == self.T - 1 and self.X_test is not None and self.y_test is not None and self.logger is not None:
-                self.logger.log({"final_test_loss": test_mse_loss})
+        if self.X_test is not None and self.y_test is not None:
+
+            min_test_loss = float('inf')
+
+            for model_state_dict in self.S_next:
+                self.model.load_state_dict(model_state_dict)
+                test_loss = self.evaluation(self.X_test, self.y_test)
+                if test_loss < min_test_loss:
+                    min_test_loss = test_loss
+
+            if self.logger is not None:
+                self.logger.log({"final_test_loss": min_test_loss})
+            else:
+                print(f"final test loss: {min_test_loss}")
 
         return train_loss, test_loss
 
