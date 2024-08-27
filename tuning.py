@@ -24,7 +24,7 @@ def parse_arguments():
     parser.add_argument(
         '--method', 
         type=str, 
-        default='random',
+        default='grid',
         choices=['random', 'grid'],
         help='Method for hyperparameter tuning'
     )
@@ -172,31 +172,31 @@ if __name__ == "__main__":
 
     parameters_dict = {
         'T': {
-            'values': [100, 200, 400]
+            'values': [100, 300, 500]
             },
         'init_sigma': {
-            'values': [2.0, 1.0, 0.1]
+            'values': [1.0, 0.1]
         },
         'lr': {
-            'values': [5e-4, 1e-4, 1e-5, 1e-6]
+            'values': [5e-5, 1e-5, 5e-6]
         },
         'end_factor': {
-            'values': [0.0, 0.1, 0.5, 1.0]
-        },
-        'n': {
-            'values': [0.1, 0.3, 0.5, 0.7]
+            'values': [0.1, 0.2, 0.5]
         },
         'm': {
-            'values': [0.1, 0.3, 0.5, 0.7]
+            'values': [0.5, 0.7, 0.9]
         },
         'MC_steps': {
-            'values': [50, 100, 200, 400, 1000]
+            'values': [50, 100, 200]
         },
         'burn_in_fraction': {
-            'values': [0.1, 0.3, 0.5]
+            'values': [0.5, 0.7, 0.9]
+        },
+        'n': {
+            'value': 0.1
         },
         'zeta': {
-            'values': [1.0, 0.1]
+            'value': 1.0
         },
         'tau': {
             'value': 1.0
