@@ -23,7 +23,7 @@ class TemperingLearningRegression:
         MC_steps,
         sigmas, zeta,
         init_lr, init_factor=1.0, end_factor=0.0,
-        n=0.1, m=0.7,
+        n=0.1, m=0.5,
         burn_in_fraction = 0.2,
         tau = 1.0,
         X_test=None, y_test=None,
