@@ -179,31 +179,31 @@ if __name__ == "__main__":
 
     parameters_dict = {
         'T': {
-            'values': [10, 20, 50, 100, 200]
+            'values': [20, 50, 100, 200]
             },
         'init_sigma': {
-            'values': [2.0, 1.0, 0.5, 0.1]
+            'values': [1.0, 0.1, 0.01]
         },
         'lr': {
-            'values': [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]
+            'values': [1e-4, 5e-5, 1e-5]
         },
         'MC_steps': {
-            'values': [10, 20, 50, 100, 200]
+            'values': [20, 50, 100, 200]
         },
         'burn_in_fraction': {
-            'value': 0.5
-        },
-        'zeta': {
-            'value': 1.0
+            'values': [0.5, 0.7] 
         },
         'end_factor': {
             'value': 0.1
         },
         'n': {
-            'value': 0.1
+            'values': [0.05, 0.1, 0.2]
         },
         'm': {
             'value': 0.5
+        },
+        'zeta': {
+            'value': 1.0
         },
         'tau': {
             'value': 1.0
