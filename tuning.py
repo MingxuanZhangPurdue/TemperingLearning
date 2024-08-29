@@ -11,7 +11,6 @@ from preprocess import preprocess_UCI_dataset
 
 name_to_id_dict = {
     "wine_quality": 186,
-    "student_performance": 320,
     "abalone": 1,
     "liver_disorders": 60,
     "concrete_compressive_strength": 165
@@ -118,7 +117,8 @@ def fit(config=None):
             X_test = X_test,
             y_test = y_test,
             logger = wandb,
-            progress_bar = False
+            progress_bar = False,
+            noise_alpha = config.noise_alpha
         )
 
         trainer.train()
@@ -178,35 +178,38 @@ if __name__ == "__main__":
     sweep_config['metric'] = metric
 
     parameters_dict = {
+        'noise_alpha': {
+            'values': [0.001, 0.01]
+        },
         'T': {
             'values': [20, 50, 100, 200]
             },
         'init_sigma': {
-            'values': [1.0, 0.1, 0.01]
+            'values': [1.0, 0.1]
         },
         'lr': {
-            'values': [1e-4, 5e-5, 1e-5]
+            'values': [1e-4, 5e-5, 1e-5, 5e-6]
         },
         'MC_steps': {
-            'values': [20, 50, 100, 200]
+            'values': [20, 50, 100]
         },
         'burn_in_fraction': {
-            'values': [0.5, 0.7] 
-        },
-        'end_factor': {
-            'value': 0.1
+            'values': [0.5, 0.7]
         },
         'n': {
-            'values': [0.05, 0.1, 0.2]
+            'values': [0.05, 0.1]
         },
         'm': {
-            'values': [0.3, 0.5, 0.7]
+            'values': [0.5, 0.7]
         },
         'zeta': {
             'value': 1.0
         },
         'tau': {
             'value': 1.0
+        },
+        'end_factor': {
+            'value': 0.1
         },
         'hidden_dim': {
             'value': args.hidden_dim

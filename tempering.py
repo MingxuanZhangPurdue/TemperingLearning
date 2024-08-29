@@ -26,6 +26,7 @@ class TemperingLearningRegression:
         n=0.1, m=0.5,
         burn_in_fraction = 0.2,
         tau = 1.0,
+        noise_alpha = 0.01,
         X_test=None, y_test=None,
         logger=None,
         progress_bar=False):
@@ -79,6 +80,8 @@ class TemperingLearningRegression:
         self.logger = logger
 
         self.progress_bar = progress_bar
+
+        self.noise_alpha = noise_alpha
     
     def subsampling(self, t):
 
@@ -155,7 +158,7 @@ class TemperingLearningRegression:
     def parameter_update(self, lr):
         with torch.no_grad():
             for p in self.model.parameters():
-                p.sub_(lr * p.grad) #.add_(torch.randn_like(p) * math.sqrt(2 * lr))
+                p.sub_(lr * p.grad).add_(torch.randn_like(p) * math.sqrt(2 * lr * self.noise_alpha))
 
     def sample_collection(self):
         self.S_next.append({k: v.detach().clone() for k, v in self.model.state_dict().items()})
