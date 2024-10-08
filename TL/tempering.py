@@ -227,6 +227,20 @@ class TemperingLearningRegression:
                 print(f"final test loss: {min_test_loss}")
 
         return train_loss, test_loss
+    
+
+class TemperingLearningGeneration:
+
+    def __init__(self, model, MC_steps, sigmas, zeta, lr, n=0.1, m=0.5, burn_in_fraction=0.2, tau=1.0, noise_alpha=0.01):
+        self.model = model
+        self.MC_steps = MC_steps
+        self.sigmas = sigmas
+        self.zeta = zeta
+        self.lr = lr
+        self.n = n
+        self.m = m
+
+        
 
             
             

@@ -13,6 +13,9 @@ wandb/
 datasets/*
 !datasets/preprocess.py
 
+# ignore cache
+cache/
+
 # ignore .DS_Store
 .DS_Store
 

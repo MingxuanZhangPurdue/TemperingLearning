@@ -4,10 +4,10 @@ import random
 import wandb
 import argparse
 
-from noise_schedulers import LinearScheduler
-from tempering import TemperingLearningRegression
-from models import MLP
-from preprocess import preprocess_UCI_dataset
+from TL.noise_schedulers import LinearScheduler
+from TL.tempering import TemperingLearningRegression
+from experiments.regression.models import MLP
+from experiments.regression.preprocess import preprocess_UCI_dataset
 
 name_to_id_dict = {
     "wine_quality": 186,
@@ -178,29 +178,29 @@ if __name__ == "__main__":
     sweep_config['metric'] = metric
 
     parameters_dict = {
-        'noise_alpha': {
-            'values': [0.001, 0.01]
-        },
         'T': {
-            'values': [20, 50, 100, 200]
+            'values': [10, 20, 50, 100, 200]
             },
         'init_sigma': {
             'values': [1.0, 0.1]
         },
         'lr': {
-            'values': [1e-4, 5e-5, 1e-5, 5e-6]
+            'values': [5e-4, 1e-4, 5e-5, 1e-5, 5e-6]
         },
         'MC_steps': {
-            'values': [20, 50, 100]
+            'values': [10, 20, 50, 100, 200]
         },
         'burn_in_fraction': {
-            'values': [0.5, 0.7]
+            'values': 0.5
+        },
+        'noise_alpha': {
+            'value': 0.001
         },
         'n': {
-            'values': [0.05, 0.1]
+            'value': 0.05
         },
         'm': {
-            'values': [0.5, 0.7]
+            'value': 0.5
         },
         'zeta': {
             'value': 1.0
