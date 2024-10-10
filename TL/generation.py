@@ -1,4 +1,5 @@
 import torch
+import math
 import lightning as L
 
 
@@ -10,10 +11,9 @@ class TemperingGeneration(L.LightningModule):
         optimizer,
         lr_scheduler,
         noise_scheduler,
-        zeta,
         MC_steps,
-        T,
         lr_scheduler_interval="step",
+        zeta=1.0,
         m=0.5,
         burn_in_fraction=0.2,
         random_walk_step_size=0,
@@ -33,7 +33,7 @@ class TemperingGeneration(L.LightningModule):
 
         self.zeta = zeta
 
-        self.T = T
+        self.T = noise_scheduler.config.num_train_timesteps
 
         # set burn in fraction
         assert 0 <= burn_in_fraction < 1, "burn_in_fraction must be greater or equal to 0 and less than 1"
@@ -77,18 +77,20 @@ class TemperingGeneration(L.LightningModule):
         return {"t": t, "theta_ids": theta_ids}
 
 
-    def training_step(
-        self, 
-        batch, 
-        batch_idx
-    ):
-        T = self.current_epoch
+    def training_step(self, batch, batch_idx):
+
+        t = self.current_epoch
+
         images = batch["images"]
-        noise = torch.randn_like(images)
-        steps = torch.randint(self.scheduler.config.num_train_timesteps, (images.size(0),), device=self.device)
-        noisy_images = self.scheduler.add_noise(images, noise, steps)
-        residual = self.model(noisy_images, steps).sample
-        loss = torch.nn.functional.mse_loss(residual, noise)
+
+        pure_noise = self.scheduler.add_noise(images, torch.randn_like(images), self.T)
+
+        noisy_images = self.scheduler.add_noise(images, torch.randn_like(images), self.T - t - 1)
+
+        denoised_images = self.model(pure_noise, t).sample
+
+        loss = torch.nn.functional.mse_loss(noisy_images, denoised_images)
+
         self.log("train_loss", loss, prog_bar=True)
         
         return loss
@@ -96,9 +98,7 @@ class TemperingGeneration(L.LightningModule):
     def on_before_optimizer_step(self, optimizer):
 
         t = self.current_epoch
-
         ids_dict = self.subsampling(t)
-
         theta_ids = ids_dict["theta_ids"]
 
         # add additional gradients for t > 0
@@ -123,6 +123,16 @@ class TemperingGeneration(L.LightningModule):
                     denominator = exp_norm_squared.sum() + 1e-8
                     # Update the gradient of the parameter
                     p.grad -= (1 / (self.zeta**2)) * weighted_diff / denominator
+
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+
+        if self.random_walk_step_size > 0:
+            lr = self.trainer.lr_scheduler_configs[0].scheduler.get_last_lr()[0]
+            with torch.no_grad():
+                for p in self.model.parameters():
+                    p.add_(torch.randn_like(p) * math.sqrt(2 * lr * self.random_walk_step_size))
+    
 
     def configure_optimizers(self):
         optimizer = self.optimizer
