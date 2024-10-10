@@ -83,13 +83,16 @@ class TemperingGeneration(L.LightningModule):
 
         images = batch["images"]
 
-        pure_noise = self.scheduler.add_noise(images, torch.randn_like(images), self.T)
+        pure_noise = self.scheduler.add_noise(images, torch.randn_like(images), torch.LongTensor([self.T],device=images.device))
 
-        noisy_images = self.scheduler.add_noise(images, torch.randn_like(images), self.T - t - 1)
+        if t == self.T:
+            target_images = images
+        else:
+            target_images = self.scheduler.add_noise(images, torch.randn_like(images), torch.LongTensor([self.T - t - 1],device=images.device))
 
         denoised_images = self.model(pure_noise, t).sample
 
-        loss = torch.nn.functional.mse_loss(noisy_images, denoised_images)
+        loss = torch.nn.functional.mse_loss(target_images, denoised_images)
 
         self.log("train_loss", loss, prog_bar=True)
         
