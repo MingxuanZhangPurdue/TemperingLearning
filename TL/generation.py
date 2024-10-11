@@ -11,11 +11,11 @@ class TemperingGeneration(L.LightningModule):
         optimizer,
         lr_scheduler,
         noise_scheduler,
-        MC_steps,
+        num_training_batches,
         lr_scheduler_interval="step",
         zeta=1.0,
-        m=0.5,
-        burn_in_fraction=0.2,
+        m=0.2,
+        burn_in_fraction=0.5,
         random_walk_step_size=0,
     ):
         super().__init__()
@@ -31,42 +31,39 @@ class TemperingGeneration(L.LightningModule):
 
         self.noise_scheduler = noise_scheduler
 
+        self.T = noise_scheduler.config.num_train_timesteps
+
+        assert zeta > 0, "zeta must be greater than 0"
         self.zeta = zeta
 
-        self.T = noise_scheduler.config.num_train_timesteps
+        # set MC_steps
+        self.MC_steps = num_training_batches
 
         # set burn in fraction
         assert 0 <= burn_in_fraction < 1, "burn_in_fraction must be greater or equal to 0 and less than 1"
         self.burn_in_fraction = burn_in_fraction
-        self.burn_in_steps = int(burn_in_fraction * MC_steps)
-
-        # set MC_steps
-        self.MC_steps = MC_steps
+        self.burn_in_steps = int(burn_in_fraction * self.MC_steps)
 
         # calculate the number of MC samples
-        self.n_MC = MC_steps - self.burn_in_steps
+        self.n_MC = self.MC_steps - self.burn_in_steps
+        assert self.n_MC > 0, "n_MC must be greater than 0, please adjust burn_in_fraction or MC_steps accordingly!"
 
         # set m
         self.m = int(m * self.n_MC) if 0 < m < 1 and type(m) == float else m
         assert 0 < self.m <= self.n_MC, "m must be greater than 0 and less or eqaul to self.n_MC"
 
         # random walk step size
+        assert random_walk_step_size >= 0, "random_walk_step_size must be greater or equal to 0"
         self.random_walk_step_size = random_walk_step_size
+
+
+        self.S_prev = []
+        self.S_next = []
 
     
     def subsampling(self, t):
 
-        """
-        Perform subsampling for a given time index.
-
-        Args:
-            t (int): The time index.
-
-        Returns:
-            dict: A dictionary containing the time index and theta_ids.
-        """
-
-        assert 0 <= t < self.T, "t must be greater than or equal to 0 and less than T"
+        assert 0 <= t <= self.T, "t must be greater than or equal to 0 and less than or equal to T"
 
         if t > 0:
             assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC"
@@ -81,23 +78,24 @@ class TemperingGeneration(L.LightningModule):
 
         t = self.current_epoch
 
-        images = batch["images"]
+        clean_images = batch["images"]
 
-        pure_noise = self.scheduler.add_noise(images, torch.randn_like(images), torch.LongTensor([self.T],device=images.device))
+        pure_noise = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - 1], device=clean_images.device, dtype=torch.int64))
 
         if t == self.T:
-            target_images = images
+            noisy_images = clean_images  
         else:
-            target_images = self.scheduler.add_noise(images, torch.randn_like(images), torch.LongTensor([self.T - t - 1],device=images.device))
+            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
 
         denoised_images = self.model(pure_noise, t).sample
 
-        loss = torch.nn.functional.mse_loss(target_images, denoised_images)
+        loss = torch.nn.functional.mse_loss(noisy_images, denoised_images)
 
         self.log("train_loss", loss, prog_bar=True)
         
         return loss
     
+
     def on_before_optimizer_step(self, optimizer):
 
         t = self.current_epoch
@@ -135,16 +133,21 @@ class TemperingGeneration(L.LightningModule):
             with torch.no_grad():
                 for p in self.model.parameters():
                     p.add_(torch.randn_like(p) * math.sqrt(2 * lr * self.random_walk_step_size))
-    
+        
+        if batch_idx >= self.burn_in_steps:
+            self.sample_collection()
+
+
+    def on_train_epoch_start(self):
+        self.S_prev = self.S_next
+        self.S_next = []
+
+
+    def sample_collection(self):
+        self.S_next.append({k: v.detach().clone() for k, v in self.model.state_dict().items()})
+
 
     def configure_optimizers(self):
         optimizer = self.optimizer
         scheduler = self.lr_scheduler
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler_config": {
-                "scheduler": scheduler,
-                "interval": self.lr_scheduler_interval,
-                "frequency": 1,
-            }
-        }
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": self.lr_scheduler_interval, "frequency": 1}}

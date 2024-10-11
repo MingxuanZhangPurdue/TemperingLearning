@@ -8,6 +8,7 @@ __pycache__/
 
 # ignore wandb
 wandb/
+lightning_logs/
 
 # ignores all contents of the datasets folder except for the preprocess.py
 datasets/*
