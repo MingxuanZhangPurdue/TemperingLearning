@@ -3,19 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# ignore ipynb checkpoints
-.ipynb_checkpoints/
-
-# ignore wandb
+# ignore different logs, cache, checkpoints, etc.
 wandb/
 lightning_logs/
-
-# ignores all contents of the datasets folder except for the preprocess.py
-datasets/*
-!datasets/preprocess.py
-
-# ignore cache
 cache/
+.ipynb_checkpoints/
 
 # ignore .DS_Store
 .DS_Store
