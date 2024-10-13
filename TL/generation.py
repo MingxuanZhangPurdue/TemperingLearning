@@ -63,7 +63,7 @@ class TemperingGeneration(L.LightningModule):
     
     def subsampling(self, t):
 
-        assert 0 <= t <= self.T, "t must be greater than or equal to 0 and less than or equal to T"
+        #assert 0 <= t <= self.T, "t must be greater than or equal to 0 and less than or equal to T"
 
         if t > 0:
             assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC"
@@ -82,7 +82,7 @@ class TemperingGeneration(L.LightningModule):
 
         pure_noise = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - 1], device=clean_images.device, dtype=torch.int64))
 
-        if t == self.T:
+        if t >= self.T:
             noisy_images = clean_images  
         else:
             noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
@@ -139,8 +139,10 @@ class TemperingGeneration(L.LightningModule):
 
 
     def on_train_epoch_start(self):
-        self.S_prev = self.S_next
-        self.S_next = []
+        t = self.current_epoch
+        if t <= self.T:
+            self.S_prev = self.S_next
+            self.S_next = []
 
 
     def sample_collection(self):
