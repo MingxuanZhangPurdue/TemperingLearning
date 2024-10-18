@@ -7,27 +7,18 @@ class TemperingGeneration(L.LightningModule):
     def __init__(
         self, 
         model,
-        optimizer,
-        lr_scheduler,
         noise_scheduler,
-        num_training_batches,
-        lr_scheduler_interval="step",
+        MC_steps,
+        num_training_samples,
         zeta=1.0,
-        m=0.2,
+        m=0.5,
         burn_in_fraction=0.5,
-        random_walk_step_size=0,
-        prediction_type="noise",
+        random_walk_step_size=0.0,
+        prediction_type="epsilon",
     ):
         super().__init__()
 
         self.model = model
-
-        self.optimizer = optimizer
-
-        self.lr_scheduler = lr_scheduler
-
-        assert lr_scheduler_interval in ["step", "epoch"], "lr_scheduler_interval must be either 'step' or 'epoch'"
-        self.lr_scheduler_interval = lr_scheduler_interval
 
         self.noise_scheduler = noise_scheduler
         self.alphas = self.noise_scheduler.alphas
@@ -41,7 +32,7 @@ class TemperingGeneration(L.LightningModule):
         self.zeta = zeta
 
         # set MC_steps
-        self.MC_steps = num_training_batches
+        self.MC_steps = MC_steps
 
         # set burn in fraction
         assert 0 <= burn_in_fraction < 1, "burn_in_fraction must be greater or equal to 0 and less than 1"
@@ -63,20 +54,11 @@ class TemperingGeneration(L.LightningModule):
 
         self.prediction_type = prediction_type
 
+        self.num_training_samples = num_training_samples
+
 
         self.S_prev = []
         self.S_next = []
-
-    
-    def subsampling(self, t):
-
-        if t > 0:
-            assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC"
-            theta_ids = torch.randperm(self.n_MC, device=self.device)[:self.m].tolist()
-        else:
-            theta_ids = []
-
-        return {"t": t, "theta_ids": theta_ids}
     
 
     def add_noise_from_timestep(
@@ -85,9 +67,7 @@ class TemperingGeneration(L.LightningModule):
         noise: torch.Tensor,
         timesteps: torch.IntTensor,
     ) -> torch.Tensor:
-        # Make sure alphas_cumprod and timestep have same device and dtype as original_samples
-        # Move the self.alphas_cumprod to device to avoid redundant CPU to GPU data movement
-        # for the subsequent add_noise calls
+
         self.alphas_cumprod = self.alphas_cumprod.to(device=original_samples.device)
         alphas_cumprod = self.alphas_cumprod.to(dtype=original_samples.dtype)
         timesteps = timesteps.to(original_samples.device)
@@ -106,32 +86,28 @@ class TemperingGeneration(L.LightningModule):
         return noisy_samples
     
 
-    def training_step_noise_prediction(self, batch, batch_idx):
-
-        t = self.current_epoch
+    def training_step_epsilon_prediction(self, batch, t):
 
         clean_images = batch["images"]
 
-        if t >= self.T-1:
+        if t == self.T-1:
             noisy_images = clean_images  
-        else:
+        elif t < self.T-1:
             noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 2], device=clean_images.device, dtype=torch.int64))
+        else:
+            raise ValueError(f"Invalid timestep: {t}, please choose from 0 to {self.T-1}")
 
-        noise = torch.rand_like(clean_images)
+        epsilon = torch.rand_like(clean_images)
 
-        pure_noise_images = self.add_noise_from_timestep(noisy_images, noise, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+        pure_noise = self.add_noise_from_timestep(noisy_images, epsilon, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
 
-        predicted_noise = self.model(pure_noise_images, t).sample
+        predicted_epsilon = self.model(pure_noise, t).sample
 
-        loss = torch.nn.functional.mse_loss(noise, predicted_noise)
-
-        self.log("train_loss", loss, prog_bar=True)
+        mse_loss = torch.nn.functional.mse_loss(epsilon, predicted_epsilon)
         
-        return loss
+        return self.num_training_samples * mse_loss
     
-    def training_step_sample_prediction(self, batch, batch_idx):
-
-        t = self.current_epoch
+    def training_step_sample_prediction(self, batch, t):
 
         clean_images = batch["images"]
 
@@ -140,37 +116,35 @@ class TemperingGeneration(L.LightningModule):
         else:
             noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 2], device=clean_images.device, dtype=torch.int64))
 
-        noise = torch.rand_like(clean_images)
+        epsilon = torch.rand_like(clean_images)
 
-        pure_noise_images = self.add_noise_from_timestep(noisy_images, noise, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+        pure_noise = self.add_noise_from_timestep(noisy_images, epsilon, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
 
-        predicted_samples = self.model(pure_noise_images, t).sample
+        predicted_noisy_images = self.model(pure_noise, t).sample
 
-        loss = torch.nn.functional.mse_loss(pure_noise_images, predicted_samples)
+        mse_loss = torch.nn.functional.mse_loss(noisy_images, predicted_noisy_images)    
 
-        self.log("train_loss", loss, prog_bar=True)
-        
-        return loss
+        return self.num_training_samples * mse_loss
 
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch, t):
 
-        if self.prediction_type == "noise":
-            return self.training_step_noise_prediction(batch, batch_idx)
+        if self.prediction_type == "epsilon":
+            return self.training_step_epsilon_prediction(batch, t)
         elif self.prediction_type == "sample":
-            return self.training_step_sample_prediction(batch, batch_idx)
+            return self.training_step_sample_prediction(batch, t)
         else:
-            raise ValueError(f"Invalid prediction type: {self.prediction_type}")
+            raise ValueError(f"Invalid prediction type: {self.prediction_type}, please choose from ['epsilon', 'sample']")
     
 
-    def on_before_optimizer_step(self, optimizer):
-
-        t = self.current_epoch
-        ids_dict = self.subsampling(t)
-        theta_ids = ids_dict["theta_ids"]
+    def on_before_optimizer_step(self, t):
 
         # add additional gradients for t > 0
         if t > 0:
+
+            assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC, make sure to collect enough samples!"
+            theta_ids = torch.randperm(self.n_MC, device=self.device)[:self.m].tolist()
+        
             with torch.no_grad():
                 sampled_thetas = [self.S_prev[i] for i in theta_ids]
                 for n, p in self.model.named_parameters():
@@ -193,28 +167,17 @@ class TemperingGeneration(L.LightningModule):
                     p.grad -= (1 / (self.zeta**2)) * weighted_diff / denominator
 
 
-    def on_train_batch_end(self, outputs, batch, batch_idx):
+    def on_train_batch_end(self, lr, batch_idx):
 
         if self.random_walk_step_size > 0:
-            lr = self.trainer.lr_scheduler_configs[0].scheduler.get_last_lr()[0]
             with torch.no_grad():
                 for p in self.model.parameters():
                     p.add_(torch.randn_like(p) * math.sqrt(2 * lr * self.random_walk_step_size))
         
         if batch_idx >= self.burn_in_steps:
-            self.sample_collection()
+            self.S_next.append({k: v.detach().clone() for k, v in self.model.state_dict().items()})
 
 
-    def on_train_epoch_start(self):
+    def reset_sample_buffers(self):
         self.S_prev = self.S_next
         self.S_next = []
-
-
-    def sample_collection(self):
-        self.S_next.append({k: v.detach().clone() for k, v in self.model.state_dict().items()})
-
-
-    def configure_optimizers(self):
-        optimizer = self.optimizer
-        scheduler = self.lr_scheduler
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": self.lr_scheduler_interval, "frequency": 1}}
