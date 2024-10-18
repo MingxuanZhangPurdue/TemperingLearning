@@ -3,7 +3,6 @@ import math
 import lightning as L
 
 
-
 class TemperingGeneration(L.LightningModule):
     def __init__(
         self, 
@@ -17,6 +16,7 @@ class TemperingGeneration(L.LightningModule):
         m=0.2,
         burn_in_fraction=0.5,
         random_walk_step_size=0,
+        prediction_type="noise",
     ):
         super().__init__()
 
@@ -30,6 +30,10 @@ class TemperingGeneration(L.LightningModule):
         self.lr_scheduler_interval = lr_scheduler_interval
 
         self.noise_scheduler = noise_scheduler
+        self.alphas = self.noise_scheduler.alphas
+        self.alphas_reversed_cumprod = torch.cumprod(torch.flip(self.alphas, [0]), dim=0)
+        # each prod starts from the current timestep to the end
+        self.alphas_cumprod = torch.flip(self.alphas_reversed_cumprod, [0])
 
         self.T = noise_scheduler.config.num_train_timesteps
 
@@ -57,13 +61,14 @@ class TemperingGeneration(L.LightningModule):
         self.random_walk_step_size = random_walk_step_size
 
 
+        self.prediction_type = prediction_type
+
+
         self.S_prev = []
         self.S_next = []
 
     
     def subsampling(self, t):
-
-        #assert 0 <= t <= self.T, "t must be greater than or equal to 0 and less than or equal to T"
 
         if t > 0:
             assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC"
@@ -72,28 +77,90 @@ class TemperingGeneration(L.LightningModule):
             theta_ids = []
 
         return {"t": t, "theta_ids": theta_ids}
+    
 
+    def add_noise_from_timestep(
+        self,
+        original_samples: torch.Tensor,
+        noise: torch.Tensor,
+        timesteps: torch.IntTensor,
+    ) -> torch.Tensor:
+        # Make sure alphas_cumprod and timestep have same device and dtype as original_samples
+        # Move the self.alphas_cumprod to device to avoid redundant CPU to GPU data movement
+        # for the subsequent add_noise calls
+        self.alphas_cumprod = self.alphas_cumprod.to(device=original_samples.device)
+        alphas_cumprod = self.alphas_cumprod.to(dtype=original_samples.dtype)
+        timesteps = timesteps.to(original_samples.device)
 
-    def training_step(self, batch, batch_idx):
+        sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
+        sqrt_alpha_prod = sqrt_alpha_prod.flatten()
+        while len(sqrt_alpha_prod.shape) < len(original_samples.shape):
+            sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
+
+        sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5
+        sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.flatten()
+        while len(sqrt_one_minus_alpha_prod.shape) < len(original_samples.shape):
+            sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
+
+        noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
+        return noisy_samples
+    
+
+    def training_step_noise_prediction(self, batch, batch_idx):
 
         t = self.current_epoch
 
         clean_images = batch["images"]
 
-        pure_noise = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - 1], device=clean_images.device, dtype=torch.int64))
-
-        if t >= self.T:
+        if t >= self.T-1:
             noisy_images = clean_images  
         else:
-            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 2], device=clean_images.device, dtype=torch.int64))
 
-        denoised_images = self.model(pure_noise, t).sample
+        noise = torch.rand_like(clean_images)
 
-        loss = torch.nn.functional.mse_loss(noisy_images, denoised_images)
+        pure_noise_images = self.add_noise_from_timestep(noisy_images, noise, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+
+        predicted_noise = self.model(pure_noise_images, t).sample
+
+        loss = torch.nn.functional.mse_loss(noise, predicted_noise)
 
         self.log("train_loss", loss, prog_bar=True)
         
         return loss
+    
+    def training_step_sample_prediction(self, batch, batch_idx):
+
+        t = self.current_epoch
+
+        clean_images = batch["images"]
+
+        if t >= self.T-1:
+            noisy_images = clean_images  
+        else:
+            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 2], device=clean_images.device, dtype=torch.int64))
+
+        noise = torch.rand_like(clean_images)
+
+        pure_noise_images = self.add_noise_from_timestep(noisy_images, noise, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+
+        predicted_samples = self.model(pure_noise_images, t).sample
+
+        loss = torch.nn.functional.mse_loss(pure_noise_images, predicted_samples)
+
+        self.log("train_loss", loss, prog_bar=True)
+        
+        return loss
+
+
+    def training_step(self, batch, batch_idx):
+
+        if self.prediction_type == "noise":
+            return self.training_step_noise_prediction(batch, batch_idx)
+        elif self.prediction_type == "sample":
+            return self.training_step_sample_prediction(batch, batch_idx)
+        else:
+            raise ValueError(f"Invalid prediction type: {self.prediction_type}")
     
 
     def on_before_optimizer_step(self, optimizer):
@@ -139,10 +206,8 @@ class TemperingGeneration(L.LightningModule):
 
 
     def on_train_epoch_start(self):
-        t = self.current_epoch
-        if t <= self.T:
-            self.S_prev = self.S_next
-            self.S_next = []
+        self.S_prev = self.S_next
+        self.S_next = []
 
 
     def sample_collection(self):
