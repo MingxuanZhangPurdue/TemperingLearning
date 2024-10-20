@@ -3,9 +3,9 @@ import math
 import lightning as L
 
 
-class TemperingGeneration(L.LightningModule):
+class Tempering(L.LightningModule):
     def __init__(
-        self, 
+        self,
         model,
         noise_scheduler,
         MC_steps,
@@ -24,7 +24,7 @@ class TemperingGeneration(L.LightningModule):
         self.alphas = self.noise_scheduler.alphas
         self.alphas_reversed_cumprod = torch.cumprod(torch.flip(self.alphas, [0]), dim=0)
         # each prod starts from the current timestep to the end
-        self.alphas_cumprod = torch.flip(self.alphas_reversed_cumprod, [0])
+        self.alphas_reversed_cumprod = torch.flip(self.alphas_reversed_cumprod, [0])
 
         self.T = noise_scheduler.config.num_train_timesteps
 
@@ -68,16 +68,16 @@ class TemperingGeneration(L.LightningModule):
         timesteps: torch.IntTensor,
     ) -> torch.Tensor:
 
-        self.alphas_cumprod = self.alphas_cumprod.to(device=original_samples.device)
-        alphas_cumprod = self.alphas_cumprod.to(dtype=original_samples.dtype)
+        self.alphas_reversed_cumprod = self.alphas_reversed_cumprod.to(device=original_samples.device)
+        alphas_reversed_cumprod = self.alphas_reversed_cumprod.to(dtype=original_samples.dtype)
         timesteps = timesteps.to(original_samples.device)
 
-        sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
+        sqrt_alpha_prod = alphas_reversed_cumprod[timesteps] ** 0.5
         sqrt_alpha_prod = sqrt_alpha_prod.flatten()
         while len(sqrt_alpha_prod.shape) < len(original_samples.shape):
             sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
 
-        sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5
+        sqrt_one_minus_alpha_prod = (1 - alphas_reversed_cumprod[timesteps]) ** 0.5
         sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.flatten()
         while len(sqrt_one_minus_alpha_prod.shape) < len(original_samples.shape):
             sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
@@ -181,3 +181,23 @@ class TemperingGeneration(L.LightningModule):
     def reset_sample_buffers(self):
         self.S_prev = self.S_next
         self.S_next = []
+
+
+    def generate_samples(self, batch_size):
+
+        # Generate initial noise
+        noise = torch.randn(batch_size, *self.model.image_size, device=self.model.device)
+
+        # Predict epsilon for the first timestep
+        predicted_epsilon = self.model(noise, torch.tensor([self.T-1], device=self.model.device, dtype=torch.int64)).sample
+
+        # Get the cumulative product of alphas for the last timestep
+        alpha_prod = self.alphas_cumprod[-1]
+
+        # Calculate beta_prod
+        beta_prod = 1 - alpha_prod
+
+        # Predict the original sample
+        pred_original_sample = (noise - beta_prod**0.5 * predicted_epsilon) / alpha_prod**0.5
+
+        return pred_original_sample
