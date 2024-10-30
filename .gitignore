@@ -8,6 +8,8 @@ wandb/
 lightning_logs/
 cache/
 .ipynb_checkpoints/
+output/
+generated_samples/
 
 # ignore .DS_Store
 .DS_Store

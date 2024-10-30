@@ -1,7 +1,9 @@
 import torch
+import torchvision
 import argparse
 import lightning as L
 
+from PIL import Image
 from diffusers import DDPMScheduler
 from datasets import load_dataset
 from torchvision import transforms
@@ -9,13 +11,11 @@ from diffusers import UNet2DModel
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from tqdm import tqdm
 
-from TL.generation import TemperingGeneration
-
-
+from TL.generation import Tempering
 
 def parse_args():
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Tempering Learning for Unconditional Image Generation")
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num_nodes", type=int, default=1, help="number of nodes to use")
@@ -31,15 +31,22 @@ def parse_args():
 
     parser.add_argument("--T", type=int, default=100)
     parser.add_argument("--num_epochs_per_timestep", type=int, default=2, help="number of epochs per timestep")
-    parser.add_argument("--burn_in_fraction", type=float, default=0.5)
+    parser.add_argument("--burn_in_fraction", type=float, default=0.7)
     parser.add_argument("--zeta", type=float, default=1.0)
     parser.add_argument("--m", type=float, default=0.5)
     parser.add_argument("--prediction_type", type=str, default="epsilon")
-    parser.add_argument("--random_walk_step_size", type=float, default=0)
+    parser.add_argument("--random_walk_step_size", type=float, default=1e-6)
 
     args = parser.parse_args()
 
     return args
+
+def save_images(images: torch.Tensor, filename: str):
+    images = (images / 2 + 0.5).clamp(0, 1).squeeze()
+    grid = torchvision.utils.make_grid(images, nrow=5)
+    grid_np = (grid.permute(1, 2, 0) * 255).to(torch.uint8).cpu().numpy()
+    grid_pil = Image.fromarray(grid_np)
+    grid_pil.save(filename)
 
 def fit(args):
 
@@ -73,7 +80,6 @@ def fit(args):
     )
 
     def transform(examples):
-
         images = [preprocess(image.convert("RGB")) for image in examples["image"]]
         return {"images": images}
     
@@ -119,7 +125,7 @@ def fit(args):
 
     # set tempering learning
     MC_steps = num_training_batches * args.num_epochs_per_timestep
-    tlmodel = TemperingGeneration(
+    tlmodel = Tempering(
         model=model,
         noise_scheduler=noise_scheduler,
         MC_steps=MC_steps,
@@ -151,7 +157,8 @@ def fit(args):
     # train
     tlmodel.train()
 
-    for t in tqdm(range(args.T), desc="Training timesteps"):
+    progress_bar = tqdm(range(args.T), desc="Training timesteps")
+    for t in progress_bar:
 
         tlmodel.reset_sample_buffers()
 
@@ -167,22 +174,28 @@ def fit(args):
 
                 loss = tlmodel.training_step(batch, t)
 
-                avg_train_loss_per_timestep += loss.item()/num_training_samples
+                avg_train_loss_per_timestep += loss.item()
 
                 fabric.backward(loss)
 
-                tlmodel.on_before_optimizer_step(t)
+                #tlmodel.on_before_optimizer_step(t)
 
                 optimizer.step()
 
                 lr_scheduler.step()
 
-                tlmodel.on_train_batch_end(lr_scheduler.get_last_lr()[0], batch_idx)
+                #tlmodel.on_train_batch_end(lr_scheduler.get_last_lr()[0], batch_idx)
 
                 batch_idx += 1
 
         avg_train_loss_per_timestep /= (args.num_epochs_per_timestep * num_training_batches)
-        tqdm.set_postfix({'Avg train loss': f'{avg_train_loss_per_timestep:.4f}'})
+        progress_bar.set_postfix({'Avg train loss': f'{avg_train_loss_per_timestep:.4f}'})
+
+        tlmodel.eval()
+        images = tlmodel.generate_samples(args.train_batch_size, t)
+        save_images(images, f"generated_samples/images_{t}.png")
+        tlmodel.train()
+    
 
 if __name__ == "__main__":
     args = parse_args()
