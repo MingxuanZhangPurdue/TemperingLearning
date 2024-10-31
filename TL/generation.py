@@ -231,7 +231,7 @@ class Tempering(L.LightningModule):
             predicted_epsilon = self.model(noise, t).sample
 
             # Get the cumulative product of alphas for the last timestep
-            alpha_prod = self.noise_scheduler.alphas_cumprod[t].to(device=noise.device)
+            alpha_prod = self.noise_scheduler.alphas_cumprod[timestep].to(device=noise.device)
 
             # Calculate beta_prod
             beta_prod = 1 - alpha_prod
