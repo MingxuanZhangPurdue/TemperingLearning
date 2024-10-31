@@ -24,15 +24,15 @@ def parse_args():
 
     parser.add_argument("--image_size", type=int, default=32)
 
-    parser.add_argument("--learning_rate", type=float, default=1e-3)
-    parser.add_argument("--train_batch_size", type=int, default=32)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--train_batch_size", type=int, default=16)
     parser.add_argument("--lr_warmup_steps", type=int, default=100)
 
 
     parser.add_argument("--T", type=int, default=100)
     parser.add_argument("--num_epochs_per_timestep", type=int, default=2, help="number of epochs per timestep")
     parser.add_argument("--burn_in_fraction", type=float, default=0.7)
-    parser.add_argument("--zeta", type=float, default=1.0)
+    parser.add_argument("--zeta", type=float, default=5.0)
     parser.add_argument("--m", type=float, default=0.5)
     parser.add_argument("--prediction_type", type=str, default="epsilon")
     parser.add_argument("--random_walk_step_size", type=float, default=1e-6)
@@ -121,17 +121,18 @@ def fit(args):
     )
 
     # set noise scheduler
-    noise_scheduler = DDPMScheduler(num_train_timesteps=args.T)
+    noise_scheduler = DDPMScheduler()
 
     # set tempering learning
-    MC_steps = num_training_batches * args.num_epochs_per_timestep
+    num_mc_steps = num_training_batches * args.num_epochs_per_timestep
     tlmodel = Tempering(
         model=model,
         noise_scheduler=noise_scheduler,
-        MC_steps=MC_steps,
+        T=args.T,
+        num_mc_steps=num_mc_steps,
         num_training_samples=num_training_samples,
         zeta=args.zeta,
-        m=args.m,
+        mc_subset_ratio=args.m,
         burn_in_fraction=args.burn_in_fraction,
         random_walk_step_size=args.random_walk_step_size,
         prediction_type=args.prediction_type,
@@ -178,13 +179,13 @@ def fit(args):
 
                 fabric.backward(loss)
 
-                #tlmodel.on_before_optimizer_step(t)
+                tlmodel.on_before_optimizer_step(t)
 
                 optimizer.step()
 
                 lr_scheduler.step()
 
-                #tlmodel.on_train_batch_end(lr_scheduler.get_last_lr()[0], batch_idx)
+                tlmodel.on_train_batch_end(lr_scheduler.get_last_lr()[0], batch_idx)
 
                 batch_idx += 1
 

@@ -5,15 +5,16 @@ import lightning as L
 class Tempering(L.LightningModule):
     def __init__(
         self,
-        model,
+        model: torch.nn.Module,
         noise_scheduler,
-        num_training_samples,
-        num_mc_steps,       
-        zeta=2.0,
-        mc_subset_ratio=0.5,
-        burn_in_fraction=0.5,
-        random_walk_step_size=0.0,
-        prediction_type="epsilon"
+        num_training_samples: int,
+        T: int,
+        num_mc_steps: int,      
+        zeta: float = 1.0,
+        mc_subset_ratio: float = 0.5,
+        burn_in_fraction: float = 0.5,
+        random_walk_step_size: float = 0.0,
+        prediction_type: str = "epsilon"
     ):
         super().__init__()
         
@@ -21,17 +22,19 @@ class Tempering(L.LightningModule):
 
         self.noise_scheduler = noise_scheduler
 
+        assert 1 <= T <= self.noise_scheduler.config.num_train_timesteps, "T must be greater or equal to 1 and less or equal to the number of training timesteps of the noise scheduler"
+        self.T = T
+        self.noise_scheduler.set_timesteps(T)
+
         self.alphas_reversed_cumprod = torch.cumprod(torch.flip(self.noise_scheduler.alphas, [0]), dim=0)
         # each prod starts from the current timestep to the end
         self.alphas_reversed_cumprod = torch.flip(self.alphas_reversed_cumprod, [0])
-
-        # get the number of timesteps used for training our model, this might be different from the number of training timesteps used for the noise scheduler
-        self.T = self.noise_scheduler.timesteps.shape[0]
 
         assert zeta > 0, "zeta must be greater than 0"
         self.zeta = zeta
 
         # set MC_steps
+        assert num_mc_steps >= 1, "num_mc_steps must be greater or equal to 1"
         self.num_mc_steps = num_mc_steps    
 
         # set burn in fraction
@@ -41,11 +44,11 @@ class Tempering(L.LightningModule):
 
         # calculate the number of MC samples
         self.num_mc_samples = self.num_mc_steps - self.burn_in_steps
-        assert self.num_mc_samples > 0, "n_MC must be greater than 0, please adjust burn_in_fraction or n_mc_steps accordingly!"
+        assert self.num_mc_samples > 0, "n_MC must be greater than 0, please adjust burn_in_fraction or num_mc_steps accordingly!"
 
         # set mc_subset_size
         self.mc_subset_size = int(mc_subset_ratio * self.num_mc_samples) if 0 < mc_subset_ratio < 1 and type(mc_subset_ratio) == float else mc_subset_ratio
-        assert 0 < self.mc_subset_size <= self.num_mc_samples, "mc_subset_size must be greater than 0 and less or equal to self.num_mc_samples"
+        assert 0 < self.mc_subset_size <= self.num_mc_samples, "mc_subset_size must be greater than 0 and less or equal to self.num_mc_samples, please adjust mc_subset_ratio accordingly!"
 
         # random walk step size
         assert random_walk_step_size >= 0, "random_walk_step_size must be greater or equal to 0"
@@ -97,7 +100,8 @@ class Tempering(L.LightningModule):
         if t == self.T-1:
             noisy_images = clean_images  
         elif t < self.T-1:
-            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 2], device=clean_images.device, dtype=torch.int64))
+            timestep = self.noise_scheduler.timesteps[self.T - t - 2].to(clean_images.device)
+            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), timestep)
         else:
             raise ValueError(f"Invalid timestep: {t}, please choose from 0 to {self.T-1}")
 
@@ -105,7 +109,8 @@ class Tempering(L.LightningModule):
         epsilon = torch.rand_like(clean_images)
 
         # add speilon to the noisy images to generate pesudo noise from there
-        pesudo_noise = self.add_noise_from_timestep(noisy_images, epsilon, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+        timestep = self.noise_scheduler.timesteps[self.T - t - 1].to(clean_images.device)
+        pesudo_noise = self.add_noise_from_timestep(noisy_images, epsilon, timestep)
 
         # predict the epsilon
         predicted_epsilon = self.model(pesudo_noise, t).sample
@@ -123,14 +128,16 @@ class Tempering(L.LightningModule):
         # add noise to the clean images
         if t >= self.T-1:
             noisy_images = clean_images
-        else:
-            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), torch.tensor([self.T - t - 2], device=clean_images.device, dtype=torch.int64))
+        else:   
+            timestep = self.noise_scheduler.timesteps[self.T - t - 2].to(clean_images.device)
+            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), timestep)
 
         # draw epsilon from the standard normal distribution
         epsilon = torch.rand_like(clean_images)
 
         # add epsilon to the noisy images to generate pesudo noise from there
-        pesudo_noise = self.add_noise_from_timestep(noisy_images, epsilon, torch.tensor([self.T - t - 1], device=clean_images.device, dtype=torch.int64))
+        timestep = self.noise_scheduler.timesteps[self.T - t - 1].to(clean_images.device)
+        pesudo_noise = self.add_noise_from_timestep(noisy_images, epsilon, timestep)
 
         # predict the noisy images
         predicted_noisy_images = self.model(pesudo_noise, t).sample
@@ -154,9 +161,9 @@ class Tempering(L.LightningModule):
         # add additional gradients for t > 0
         if t > 0:
             # check if the Monte Carlo sample buffers are collected enough
-            assert len(self.S_prev) == self.n_MC, "the length of self.S_prev must be equal to self.n_MC, make sure to collect enough samples!"
+            assert len(self.S_prev) == self.num_mc_samples, "the length of self.S_prev must be equal to self.num_mc_samples, make sure to collect enough samples!"
             # randomly select m samples from the Monte Carlo sample buffers
-            theta_ids = torch.randperm(self.n_MC, device=self.device)[:self.m].tolist()
+            theta_ids = torch.randperm(self.num_mc_samples, device=self.device)[:self.mc_subset_size].tolist()
             with torch.no_grad():
                 # get the selected samples
                 sampled_thetas = [self.S_prev[i] for i in theta_ids]
@@ -213,7 +220,7 @@ class Tempering(L.LightningModule):
             predicted_epsilon = self.model(noise, t).sample
 
             # Get the cumulative product of alphas for the last timestep
-            alpha_prod = self.noise_scheduler.alphas_cumprod[t]
+            alpha_prod = self.noise_scheduler.alphas_cumprod[t].to(device=noise.device)
 
             # Calculate beta_prod
             beta_prod = 1 - alpha_prod
