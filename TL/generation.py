@@ -15,6 +15,7 @@ class Tempering(L.LightningModule):
         mc_subset_ratio: Union[float, int] = 0.5,
         burn_in_fraction: float = 0.7,
         random_walk_step_size: float = 0.0,
+        sample_prediction: bool = False
     ):
         super().__init__()
         
@@ -22,7 +23,7 @@ class Tempering(L.LightningModule):
 
         self.noise_scheduler = noise_scheduler
 
-        assert 1 <= T <= self.noise_scheduler.config.num_train_timesteps, "T must be greater or equal to 1 and less or equal to the number of training timesteps of the noise scheduler"
+        assert 2 <= T <= self.noise_scheduler.config.num_train_timesteps, "T must be greater or equal to 2 and less or equal to the number of training timesteps of the noise scheduler"
         self.T = T
         self.timestep_schedule = torch.linspace(0, self.noise_scheduler.config.num_train_timesteps - 1, T, dtype=torch.long)
 
@@ -58,6 +59,9 @@ class Tempering(L.LightningModule):
 
         # set the number of training samples
         self.num_training_samples = num_training_samples
+
+        # set the sample prediction flag
+        self.sample_prediction = sample_prediction
 
         # a list of state dictionaries
         self.S_prev = []
@@ -111,7 +115,7 @@ class Tempering(L.LightningModule):
         if t == self.T-1:
             timestep = self.timestep_schedule[0].to(clean_images.device)
         else:
-            timestep = self.timestep_schedule[self.T - t - 2].to(clean_images.device)
+            timestep = self.timestep_schedule[self.T - t - 2].to(clean_images.device) + 1
         pesudo_white_noise = self.add_noise_from_timestep(noisy_images, epsilon, timestep)
 
         # predict the epsilon
@@ -121,9 +125,44 @@ class Tempering(L.LightningModule):
         mse_loss = torch.nn.functional.mse_loss(epsilon, predicted_epsilon)/2
         
         return mse_loss
+    
+    def training_step_sample_prediction(self, batch, t):
+
+        assert 0 <= t <= self.T-1, "t must be in the range of 0 to self.T-1, including the boundary values!"
+
+        # get the clean images
+        clean_images = batch["images"]
+
+        # add noise to the clean images to generate noisy images
+        if t == self.T-1:
+            noisy_images = clean_images  
+        else:
+            timestep = self.timestep_schedule[self.T - t - 2].to(clean_images.device)
+            noisy_images = self.noise_scheduler.add_noise(clean_images, torch.randn_like(clean_images), timestep)
+
+        # draw epsilon from the standard normal distribution
+        epsilon = torch.randn_like(clean_images)
+
+        # add epsilon to the noisy images to generate pesudo white (standard normal) noise from there
+        if t == self.T-1:
+            timestep = self.timestep_schedule[0].to(clean_images.device)
+        else:
+            timestep = self.timestep_schedule[self.T - t - 2].to(clean_images.device) + 1
+        pesudo_white_noise = self.add_noise_from_timestep(noisy_images, epsilon, timestep)
+
+        # predict the epsilon
+        predicted_noisy_images = self.model(pesudo_white_noise, t).sample
+
+        # calculate the mean squared error loss
+        mse_loss = torch.nn.functional.mse_loss(noisy_images, predicted_noisy_images)
+        
+        return mse_loss
 
     def training_step(self, batch, t):
-        return self.training_step_epsilon_prediction(batch, t)
+        if self.sample_prediction:
+            return self.training_step_sample_prediction(batch, t)
+        else:
+            return self.training_step_epsilon_prediction(batch, t)
     
 
     def on_before_optimizer_step(self, t):
@@ -153,7 +192,7 @@ class Tempering(L.LightningModule):
                     # Compute the sum of the exponential weights (shape: (1))
                     denominator = exp_norm_squared.sum() + 1e-8
                     # Update the gradient of the parameter
-                    p.grad -= (1 / (self.zeta**2)) * weighted_diff / (denominator * self.num_training_samples)
+                    p.grad = (1 / (self.zeta**2)) * weighted_diff / (denominator * self.num_training_samples)
 
 
     def on_train_batch_end(self, lr, batch_idx):
@@ -192,16 +231,21 @@ class Tempering(L.LightningModule):
         else:
             timestep = self.timestep_schedule[self.T - t - 1].to(white_noise.device)
 
-        # Predict epsilon for the first timestep
-        predicted_epsilon = self.model(white_noise, t).sample
+        if self.sample_prediction:
+            # Directly predict images
+            predicted_images = self.model(white_noise, t).sample
 
-        # Get the cumulative product of alphas for the last timestep
-        alpha_reversed_prod = self.alphas_reversed_cumprod[timestep].to(device=white_noise.device)
+        else:
+            # Predict epsilon
+            predicted_epsilon = self.model(white_noise, t).sample
 
-        # Calculate beta_prod
-        beta_reversed_prod = 1 - alpha_reversed_prod
+            # Get the reversed cumulative product of alphas
+            alpha_reversed_prod = self.alphas_reversed_cumprod[timestep].to(device=white_noise.device)
 
-        # Predict the original sample
-        pred_original_sample = (white_noise - beta_reversed_prod**0.5 * predicted_epsilon) / alpha_reversed_prod**0.5
+            # Calculate the reversed cumulative product of betas
+            beta_reversed_prod = 1 - alpha_reversed_prod
 
-        return pred_original_sample
+            # Predict images
+            predicted_images = (white_noise - beta_reversed_prod**0.5 * predicted_epsilon) / alpha_reversed_prod**0.5
+
+        return predicted_images

@@ -1,6 +1,11 @@
 import torch
 import torchvision
 import argparse
+
+from dataclasses import dataclass
+from lightning.fabric.utilities import AttributeDict
+from tqdm import tqdm
+
 import lightning as L
 
 from PIL import Image
@@ -9,7 +14,6 @@ from datasets import load_dataset
 from torchvision import transforms
 from diffusers import UNet2DModel
 from diffusers.optimization import get_cosine_schedule_with_warmup
-from tqdm import tqdm
 
 from TL.generation import Tempering
 
@@ -26,16 +30,16 @@ def parse_args():
 
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--train_batch_size", type=int, default=16)
-    parser.add_argument("--lr_warmup_steps", type=int, default=100)
+    parser.add_argument("--lr_warmup_steps", type=int, default=500)
 
 
     parser.add_argument("--T", type=int, default=100)
-    parser.add_argument("--num_epochs_per_timestep", type=int, default=2, help="number of epochs per timestep")
-    parser.add_argument("--burn_in_fraction", type=float, default=0.7)
-    parser.add_argument("--zeta", type=float, default=5.0)
+    parser.add_argument("--num_epochs_per_timestep", type=int, default=3, help="number of epochs per timestep")
+    parser.add_argument("--burn_in_fraction", type=float, default=0.9)
+    parser.add_argument("--zeta", type=float, default=4.0)
     parser.add_argument("--m", type=float, default=0.5)
-    parser.add_argument("--prediction_type", type=str, default="epsilon")
-    parser.add_argument("--random_walk_step_size", type=float, default=1e-6)
+    parser.add_argument("--random_walk_step_size", type=float, default=0.0)
+    parser.add_argument("--sample_prediction", action="store_true", help="whether to use sample prediction")
 
     args = parser.parse_args()
 
@@ -62,6 +66,9 @@ def fit(args):
         precision=args.precision,
     )
 
+    # launch fabric
+    fabric.launch()
+
     # set dataset
     train_dataset = load_dataset(
         "huggan/smithsonian_butterflies_subset", 
@@ -82,7 +89,7 @@ def fit(args):
     def transform(examples):
         images = [preprocess(image.convert("RGB")) for image in examples["image"]]
         return {"images": images}
-    
+
     train_dataset.set_transform(transform)
     num_training_samples = len(train_dataset)
 
@@ -94,6 +101,8 @@ def fit(args):
         pin_memory=True,
     )
     num_training_batches = len(train_dataloader)
+
+    print ("Number of training batches:", num_training_batches)
 
     # set model
     model = UNet2DModel(
@@ -120,9 +129,14 @@ def fit(args):
         ),
     )
 
+    num_trainable_params = sum(p.numel() for p in model.parameters())
+    print(f"Number of parameters: {num_trainable_params}")
+    
     # set noise scheduler
     noise_scheduler = DDPMScheduler()
+    print ("Number of training timesteps:", noise_scheduler.config.num_train_timesteps)
 
+    # set tempering learning
     # set tempering learning
     num_mc_steps = num_training_batches * args.num_epochs_per_timestep
     tlmodel = Tempering(
@@ -135,8 +149,19 @@ def fit(args):
         mc_subset_ratio=args.m,
         burn_in_fraction=args.burn_in_fraction,
         random_walk_step_size=args.random_walk_step_size,
-        prediction_type=args.prediction_type,
+        sample_prediction=args.sample_prediction,
     )
+
+    print ("Number of MC steps:", tlmodel.num_mc_steps)
+    print ("Burn in steps:", tlmodel.burn_in_steps)
+    print ("Number of MC samples:", tlmodel.num_mc_samples)
+    print ("MC subset size:", tlmodel.mc_subset_size)
+
+    print ("Number of training samples:", num_training_samples)
+    print ("Zeta:", args.zeta)
+    print ("Random walk step size:", args.random_walk_step_size)
+
+    print ("timestep mapping:", tlmodel.timestep_schedule)
 
     # set optimizer
     optimizer = torch.optim.Adam(
@@ -159,6 +184,7 @@ def fit(args):
     tlmodel.train()
 
     progress_bar = tqdm(range(args.T), desc="Training timesteps")
+
     for t in progress_bar:
 
         tlmodel.reset_sample_buffers()
@@ -196,7 +222,9 @@ def fit(args):
         images = tlmodel.generate_samples(args.train_batch_size, t)
         save_images(images, f"generated_samples/images_{t}.png")
         tlmodel.train()
-    
+
+    state = AttributeDict(model=model)
+    fabric.save("output/model.pt", state)
 
 if __name__ == "__main__":
     args = parse_args()
