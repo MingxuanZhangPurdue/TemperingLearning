@@ -192,7 +192,7 @@ class Tempering(L.LightningModule):
                     # Compute the sum of the exponential weights (shape: (1))
                     denominator = exp_norm_squared.sum() + 1e-8
                     # Update the gradient of the parameter
-                    p.grad = (1 / (self.zeta**2)) * weighted_diff / (denominator * self.num_training_samples)
+                    p.grad -= (1 / (self.zeta**2)) * weighted_diff / (denominator * self.num_training_samples)
 
 
     def on_train_batch_end(self, lr, batch_idx):

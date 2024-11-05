@@ -4,6 +4,7 @@ import argparse
 
 from dataclasses import dataclass
 from lightning.fabric.utilities import AttributeDict
+from wandb.integration.lightning.fabric import WandbLogger
 from tqdm import tqdm
 
 import lightning as L
@@ -41,6 +42,8 @@ def parse_args():
     parser.add_argument("--random_walk_step_size", type=float, default=0.0)
     parser.add_argument("--sample_prediction", action="store_true", help="whether to use sample prediction")
 
+    parser.add_argument("--wandb_project_name", type=str, default="Tempering Learning Unconditional Image Generation")
+
     args = parser.parse_args()
 
     return args
@@ -57,6 +60,12 @@ def fit(args):
     # set seed
     L.seed_everything(args.seed)
 
+    # set wandb logger
+    wandb_logger = WandbLogger(
+        project=args.wandb_project_name
+    )
+    wandb_logger.log_hyperparams(vars(args))
+
     # set fabric
     fabric = L.Fabric(
         accelerator="auto", 
@@ -64,6 +73,7 @@ def fit(args):
         num_nodes=args.num_nodes,
         strategy=args.strategy,
         precision=args.precision,
+        loggers=[wandb_logger]
     )
 
     # launch fabric
@@ -217,6 +227,9 @@ def fit(args):
 
         avg_train_loss_per_timestep /= (args.num_epochs_per_timestep * num_training_batches)
         progress_bar.set_postfix({'Avg train loss': f'{avg_train_loss_per_timestep:.4f}'})
+        fabric.log_dict({
+            "avg_train_loss_per_timestep": avg_train_loss_per_timestep,
+        })
 
         tlmodel.eval()
         images = tlmodel.generate_samples(args.train_batch_size, t)
