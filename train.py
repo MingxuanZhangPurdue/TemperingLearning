@@ -228,7 +228,7 @@ def fit(args):
         avg_train_loss_per_timestep /= (args.num_epochs_per_timestep * num_training_batches)
         progress_bar.set_postfix({'Avg train loss': f'{avg_train_loss_per_timestep:.4f}'})
         fabric.log_dict({
-            "avg_train_loss_per_timestep": avg_train_loss_per_timestep,
+            "avg_train_loss_per_timestep": avg_train_loss_per_timestep
         })
 
         tlmodel.eval()
