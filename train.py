@@ -2,7 +2,6 @@ import torch
 import torchvision
 import argparse
 
-from dataclasses import dataclass
 from lightning.fabric.utilities import AttributeDict
 from wandb.integration.lightning.fabric import WandbLogger
 from tqdm import tqdm
