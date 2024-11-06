@@ -33,7 +33,8 @@ def parse_args():
     parser.add_argument("--optimizer", type=str, default="SGD", choices=["Adam", "SGD"])
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--train_batch_size", type=int, default=16)
-    parser.add_argument("--lr_warmup_steps", type=int, default=500)
+    parser.add_argument("--lr_warmup_fraction", type=float, default=0.1)
+    parser.add_argument("--lr_warmup_steps", type=int, default=None)
 
     parser.add_argument("--start_timestep", type=int, default=500)
     parser.add_argument("--T", type=int, default=100)
@@ -197,6 +198,10 @@ def fit(args):
     tlmodel.train()
 
     progress_bar = tqdm(range(args.T), desc="Training timesteps")
+
+    if args.lr_warmup_steps is None:
+        assert 0 < args.lr_warmup_fraction < 1, "lr_warmup_fraction must be greater than 0 and less than 1"
+        args.lr_warmup_steps = int(args.lr_warmup_fraction * args.num_epochs_per_timestep * num_training_batches)
 
     for t in progress_bar:
 
