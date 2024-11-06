@@ -192,6 +192,7 @@ def fit(args):
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     # train
+    global_train_step = 0
     tlmodel.train()
 
     progress_bar = tqdm(range(args.T), desc="Training timesteps")
@@ -201,13 +202,15 @@ def fit(args):
         tlmodel.reset_sample_buffers()
 
         optimizer, lr_scheduler = reset_optimizer_and_scheduler(model, args, num_training_batches)
-        optimizer = fabric.setup(optimizer)
+        optimizer = fabric.setup_optimizers(optimizer)
 
         batch_idx = 0
 
         avg_train_loss_per_timestep = 0
 
         for epoch in range(args.num_epochs_per_timestep):
+
+            avg_train_loss_per_epoch = 0
 
             for _, batch in enumerate(train_dataloader):
 
@@ -216,6 +219,7 @@ def fit(args):
                 loss = tlmodel.training_step(batch, t)
 
                 avg_train_loss_per_timestep += loss.item()
+                avg_train_loss_per_epoch += loss.item()
 
                 fabric.backward(loss)
 
@@ -223,9 +227,12 @@ def fit(args):
 
                 optimizer.step()
 
-                fabric.log_dict({
-                    "learning_rate": lr_scheduler.get_last_lr()[0]
-                })
+                fabric.log_dict(
+                    {
+                        "learning_rate": lr_scheduler.get_last_lr()[0]
+                    },
+                    step=global_train_step
+                )
 
                 lr_scheduler.step()
 
@@ -233,11 +240,23 @@ def fit(args):
 
                 batch_idx += 1
 
+                global_train_step += 1
+
+            fabric.log_dict(
+                {
+                    "avg_train_loss_per_epoch": avg_train_loss_per_epoch/num_training_batches
+                },
+                step=global_train_step
+            )
+
         avg_train_loss_per_timestep /= (args.num_epochs_per_timestep * num_training_batches)
         progress_bar.set_postfix({'Avg train loss': f'{avg_train_loss_per_timestep:.4f}'})
-        fabric.log_dict({
-            "avg_train_loss_per_timestep": avg_train_loss_per_timestep
-        })
+        fabric.log_dict(
+            {
+                "avg_train_loss_per_timestep": avg_train_loss_per_timestep
+            },
+            step=t
+        )
 
         tlmodel.eval()
         images = tlmodel.generate_samples(args.train_batch_size, t)
