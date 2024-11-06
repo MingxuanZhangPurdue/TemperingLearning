@@ -25,7 +25,8 @@ class Tempering(L.LightningModule):
 
         assert 2 <= T <= self.noise_scheduler.config.num_train_timesteps, "T must be greater or equal to 2 and less or equal to the number of training timesteps of the noise scheduler"
         self.T = T
-        self.timestep_schedule = torch.linspace(0, int(self.noise_scheduler.config.num_train_timesteps/2) - 1, T, dtype=torch.long)
+        self.timestep_schedule = torch.linspace(0, int(self.noise_scheduler.config.num_train_timesteps/2), T-1, dtype=torch.long)
+        self.timestep_schedule = torch.cat([self.timestep_schedule, torch.tensor([self.noise_scheduler.config.num_train_timesteps - 1])])
 
         # calculate the cumulative product of reversed alphas
         self.alphas_reversed_cumprod = torch.cumprod(torch.flip(self.noise_scheduler.alphas, [0]), dim=0)
