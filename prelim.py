@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--train_batch_size", type=int, default=16)
     parser.add_argument("--lr_warmup_steps", type=int, default=500)
 
-
+    parser.add_argument("--start_timestep", type=int, default=500)
     parser.add_argument("--T", type=int, default=100)
     parser.add_argument("--num_epochs_per_timestep", type=int, default=3, help="number of epochs per timestep")
     parser.add_argument("--burn_in_fraction", type=float, default=0.9)
@@ -168,6 +168,7 @@ def fit(args):
     tlmodel = Tempering(
         model=model,
         noise_scheduler=noise_scheduler,
+        start_timestep=args.start_timestep,
         T=args.T,
         num_mc_steps=num_mc_steps,
         num_training_samples=num_training_samples,
